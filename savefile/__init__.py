@@ -1,0 +1,41 @@
+"""savefile: a save file serializer and version migration kernel."""
+
+from .core import (
+    CHECKSUM_SIZE,
+    CURRENT_VERSION,
+    DEFAULT_MANA,
+    DEFAULT_SHARDS,
+    FIELDS,
+    HEADER_SIZE,
+    MAGIC,
+    MAX_BLOB_SIZE,
+    SaveError,
+    decode_state,
+    decode_uvarint,
+    decode_value,
+    encode_state,
+    encode_uvarint,
+    encode_value,
+    migrate_state,
+    read_version,
+)
+
+__all__ = [
+    "CHECKSUM_SIZE",
+    "CURRENT_VERSION",
+    "DEFAULT_MANA",
+    "DEFAULT_SHARDS",
+    "FIELDS",
+    "HEADER_SIZE",
+    "MAGIC",
+    "MAX_BLOB_SIZE",
+    "SaveError",
+    "decode_state",
+    "decode_uvarint",
+    "decode_value",
+    "encode_state",
+    "encode_uvarint",
+    "encode_value",
+    "migrate_state",
+    "read_version",
+]
