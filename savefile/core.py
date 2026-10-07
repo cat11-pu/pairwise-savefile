@@ -119,7 +119,7 @@ def encode_value(value, out, depth=0):
     if isinstance(value, dict):
         out.append(TAG_MAP)
         out += encode_uvarint(len(value))
-        for key, item in value.items():
+        for key, item in _sorted_items(value):
             if not isinstance(key, str):
                 raise SaveError("map keys must be text")
             encode_value(key, out, depth + 1)
@@ -160,7 +160,10 @@ def decode_value(data, pos, depth=0):
         return True, pos
     if tag == TAG_INT:
         raw, pos = decode_uvarint(data, pos)
-        return raw >> 1, pos
+        value = (raw >> 1) ^ -(raw & 1)
+        if not INT_MIN <= value <= INT_MAX:
+            raise SaveError("the whole number is out of range")
+        return value, pos
     if tag == TAG_TEXT:
         return _read_text(data, pos)
     if tag == TAG_LIST:
@@ -176,7 +179,10 @@ def _read_text(data, pos):
     end = pos + length
     if end > len(data):
         raise SaveError("the save ends inside a text value", incomplete=True)
-    return data[pos:end].decode("utf-8", "replace"), end
+    try:
+        return data[pos:end].decode("utf-8"), end
+    except UnicodeDecodeError:
+        raise SaveError("a text value is not valid UTF-8")
 
 
 def _read_list(data, pos, depth):
@@ -203,8 +209,8 @@ def _read_map(data, pos, depth):
         if not isinstance(key, str):
             raise SaveError("map keys must be text")
         current = key.encode("utf-8")
-        if previous is not None and current == previous:
-            raise SaveError("a map cannot hold the same key twice")
+        if previous is not None and current <= previous:
+            raise SaveError("map keys must be written in ascending order")
         previous = current
         item, pos = decode_value(data, pos, depth + 1)
         pairs[key] = item
@@ -220,13 +226,16 @@ def _fill_defaults(record):
     """Fill in the fields a record leaves out."""
     for introduced in DEFAULTS.values():
         for key, make in introduced.items():
-            record[key] = make()
+            if key not in record:
+                record[key] = make()
 
 
 def _check_field(key, value):
     """Check that the value a record stores under key has the field shape."""
     kind = FIELD_KINDS[key]
     if kind == "int":
+        if isinstance(value, bool):
+            raise SaveError("field %r must be a whole number" % key)
         if not isinstance(value, int):
             raise SaveError("field %r must be a whole number" % key)
         if not INT_MIN <= value <= INT_MAX:
@@ -310,7 +319,8 @@ def _split_blob(data):
     version = data[len(MAGIC)]
     if version not in FIELDS:
         raise SaveError("version %d is not a version this build knows" % version)
-    _blob_checksum(data)
+    if _blob_checksum(data) != _checksum(data[:-CHECKSUM_SIZE]):
+        raise SaveError("the save checksum does not match its contents")
     return version, data[HEADER_SIZE:-CHECKSUM_SIZE]
 
 
@@ -323,7 +333,9 @@ def read_version(data):
 def decode_state(data):
     """Decode a save blob, migrating its record up to the current version."""
     version, body = _split_blob(data)
-    state, _pos = decode_value(body, 0)
+    state, pos = decode_value(body, 0)
+    if pos != len(body):
+        raise SaveError("the save carries bytes after its record")
     return migrate_state(state, version)
 
 
@@ -333,7 +345,7 @@ def migrate_state(state, from_version):
         raise SaveError("version %r is not a version this build knows" % (from_version,))
     _check_record(state, from_version)
     record = dict(state)
-    for version in range(from_version + 1, CURRENT_VERSION):
+    for version in range(from_version, CURRENT_VERSION):
         record = _migrate_step(record, version)
     return record
 
@@ -344,6 +356,8 @@ def _migrate_step(state, version):
     record = {renames.get(key, key): value for key, value in state.items()}
     for key in DROPS.get(version, ()):
         record.pop(key, None)
-    _fill_defaults(record)
+    for key, make in DEFAULTS.get(version + 1, {}).items():
+        if key not in record:
+            record[key] = make()
     expected = FIELDS[version + 1]
-    return {key: record[key] for key in expected if key in record}
+    return {key: record[key] for key in expected}
